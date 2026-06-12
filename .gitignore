@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+
+# Environmental credentials and local system overrides
+.env
+config/environment.js
+
+# Local Agent session traces
+.claw/
+.sandbox-home/
+.sandbox-tmp/
+
+# OS/Editor specific garbage
+.DS_Store
+.vscode/
