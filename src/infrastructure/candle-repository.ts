@@ -127,3 +127,50 @@ export async function getRecentCandles(
 export async function loadStrategyCandles(symbol: string): Promise<Candle[]> {
   return getRecentCandles(symbol, '1h', STRATEGY_CANDLE_LIMIT);
 }
+
+/**
+ * Loads ALL closed candles for a symbol/interval within an optional time
+ * range, in ascending chronological order. Unlike getRecentCandles (which
+ * is capped for the live RAM cache), this is for backtesting — a backtest
+ * needs the full historical series, not just the most recent N candles.
+ */
+export async function loadCandleRange(
+  symbol: string,
+  interval: Candle['interval'],
+  fromOpenTime?: number,
+  toOpenTime?: number
+): Promise<Candle[]> {
+  const conditions: string[] = ['symbol = $1', 'interval = $2', 'is_closed = TRUE'];
+  const params: unknown[] = [symbol, interval];
+
+  if (fromOpenTime !== undefined) {
+    params.push(fromOpenTime);
+    conditions.push(`open_time >= $${params.length}`);
+  }
+  if (toOpenTime !== undefined) {
+    params.push(toOpenTime);
+    conditions.push(`open_time <= $${params.length}`);
+  }
+
+  const result = await query(
+    `SELECT symbol, interval, open_time, close_time, open, high, low, close, volume, source, is_closed
+     FROM market_candles
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY open_time ASC`,
+    params
+  );
+
+  return result.rows.map((row): Candle => ({
+    symbol: row.symbol,
+    interval: row.interval as Candle['interval'],
+    openingTime: toNumber(row.open_time),
+    closeTime: toNumber(row.close_time),
+    open: toNumber(row.open),
+    high: toNumber(row.high),
+    low: toNumber(row.low),
+    close: toNumber(row.close),
+    volume: toNumber(row.volume),
+    source: row.source as Candle['source'],
+    isClosed: row.is_closed,
+  }));
+}

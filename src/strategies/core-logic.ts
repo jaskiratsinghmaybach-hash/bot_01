@@ -1,15 +1,8 @@
 import type { Candle } from '../types/index.js';
 
 // ---------------------------------------------------------------------------
-// 1. CODEX COMPLIANT INTERFACES
+// 1. STRATEGY CONFIGURATION
 // ---------------------------------------------------------------------------
-
-/** Keeps your existing live binance-feed.ts processing loop 100% functional */
-interface StrategySignal {
-  shouldEnter: boolean;
-  direction: 'BUY' | 'SELL' | null;
-  reason: string;
-}
 
 export interface StrategyConfig {
   /** EMA period for trend filter. Default: 50 */
@@ -293,16 +286,3 @@ export function evaluateStrategy(
   };
 }
 
-// ---------------------------------------------------------------------------
-// ⚡ MASTER ADAPTER ENTRY POINT (Keeps everything safe)
-// ---------------------------------------------------------------------------
-export function evaluateMarketStrategy(candles: Candle[]): StrategySignal {
-  const candidate = evaluateStrategy(candles);
-
-  // Return exactly what the pipeline requires so execution parameters match downstream
-  return {
-    shouldEnter: candidate.shouldEnter,
-    direction: candidate.direction, 
-    reason: candidate.reason
-  };
-}
