@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import environment from '../config/environment.js';
 import { pool } from '../infrastructure/database.js'; // Using the established pool instance
 import { loadStrategyCandles } from '../infrastructure/candle-repository.js';
 import {
@@ -10,7 +11,7 @@ import {
   DEFAULT_STRATEGY_CONFIG,
 } from '../strategies/core-logic.js';
 
-const SYMBOL = 'SOLUSDC';
+const SYMBOL = environment.SYMBOL;
 
 async function main() {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -109,7 +110,8 @@ async function main() {
 
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   if (candidate.shouldEnter) {
-    console.log('  ✅  VALID TRADE CANDIDATE TAGGED — ready for execution phase');
+    console.log(`  ✅  VALID TRADE CANDIDATE — TRADING_MODE is currently "${environment.TRADING_MODE}"`);
+    console.log('      (dry-run: logged only. paper: simulated fill. live: not yet implemented.)');
   } else {
     console.log('  ⏸️   No trade candidate — see failedFilters above');
   }
