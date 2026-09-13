@@ -1,5 +1,8 @@
 import { Candle } from '../types/index.js';
 import { query } from './database.js';
+import { isValidClosedCandle } from './candle-validation.js';
+
+export { isValidClosedCandle };
 
 const STRATEGY_CANDLE_LIMIT = 200;
 
@@ -32,26 +35,6 @@ export async function ensureCandleStorage(): Promise<void> {
 
 function toNumber(value: unknown): number {
   return typeof value === 'number' ? value : Number(value);
-}
-
-export function isValidClosedCandle(candle: Candle): boolean {
-  const prices = [candle.open, candle.high, candle.low, candle.close, candle.volume];
-  const hasValidNumbers = prices.every((value) => Number.isFinite(value) && value >= 0);
-  const hasValidTime = Number.isInteger(candle.openingTime)
-    && Number.isInteger(candle.closeTime)
-    && candle.closeTime > candle.openingTime;
-
-  return candle.source === 'binance'
-    && candle.isClosed
-    && candle.symbol.length > 0
-    && (candle.interval === '1m' || candle.interval === '1h')
-    && hasValidTime
-    && hasValidNumbers
-    && candle.high >= candle.low
-    && candle.high >= candle.open
-    && candle.high >= candle.close
-    && candle.low <= candle.open
-    && candle.low <= candle.close;
 }
 
 export async function upsertCandle(candle: Candle): Promise<void> {
