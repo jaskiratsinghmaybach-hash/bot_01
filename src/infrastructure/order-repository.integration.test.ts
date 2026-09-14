@@ -26,12 +26,15 @@ test("order_history round-trip: insert, status update, and read-back against rea
     side: "BUY" as const,
     status: "CREATED" as const,
     provenance: "PAPER" as const,
+    candleOpenTime: Date.now(),
     requestedPrice: 150.25,
     requestedQuantity: 3.327,
     filledPrice: null,
     filledQuantity: null,
     stopLoss: 147.1,
     takeProfit: 156.55,
+    stopLossOrderId: null,
+    takeProfitOrderId: null,
     feePaid: null,
     slippageApplied: null,
     createdAt: Date.now(),
@@ -86,4 +89,164 @@ after(async () => {
   if (!hasDatabase) return;
   const { pool } = await import("./database.js");
   await pool.end();
+});
+
+test("hasActiveOrderForCandle: true for an active order, false after it's REJECTED/CANCELED", { skip: !hasDatabase }, async () => {
+  const repo = await import("./order-repository.js");
+  await repo.ensureOrderStorage();
+  const { query } = await import("./database.js");
+
+  const candleOpenTime = Date.now();
+  const symbol = `T1_${Date.now()%100000}`;
+  const id = `live_inttest_${Date.now()}`;
+
+  const order = {
+    id,
+    clientOrderId: `bot01live_inttest_${Date.now()}`,
+    symbol,
+    side: "BUY" as const,
+    status: "CREATED" as const,
+    provenance: "LIVE" as const,
+    candleOpenTime,
+    requestedPrice: 150,
+    requestedQuantity: 1,
+    filledPrice: null,
+    filledQuantity: null,
+    stopLoss: 145,
+    takeProfit: 160,
+    stopLossOrderId: null,
+    takeProfitOrderId: null,
+    feePaid: null,
+    slippageApplied: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  await repo.insertOrder(order);
+  const activeBefore = await repo.hasActiveOrderForCandle(symbol, "LIVE", candleOpenTime);
+  assert.equal(activeBefore, true);
+
+  await repo.updateOrderStatus(id, "REJECTED");
+  const activeAfter = await repo.hasActiveOrderForCandle(symbol, "LIVE", candleOpenTime);
+  assert.equal(activeAfter, false);
+
+  await query("DELETE FROM order_history WHERE id = $1", [id]);
+});
+
+test("hasOpenPosition: true while FILLED, false once no open-state orders remain", { skip: !hasDatabase }, async () => {
+  const repo = await import("./order-repository.js");
+  await repo.ensureOrderStorage();
+  const { query } = await import("./database.js");
+
+  const symbol = `T2_${Date.now()%100000}`;
+  const id = `live_inttest2_${Date.now()}`;
+
+  const order = {
+    id,
+    clientOrderId: `bot01live_inttest2_${Date.now()}`,
+    symbol,
+    side: "BUY" as const,
+    status: "FILLED" as const,
+    provenance: "LIVE" as const,
+    candleOpenTime: Date.now(),
+    requestedPrice: 150,
+    requestedQuantity: 1,
+    filledPrice: 150.1,
+    filledQuantity: 1,
+    stopLoss: 145,
+    takeProfit: 160,
+    stopLossOrderId: "123",
+    takeProfitOrderId: "124",
+    feePaid: 0.15,
+    slippageApplied: 0.05,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  await repo.insertOrder(order);
+  const openBefore = await repo.hasOpenPosition(symbol, "LIVE");
+  assert.equal(openBefore, true);
+
+  await query("UPDATE order_history SET status = 'CANCELED' WHERE id = $1", [id]);
+  const openAfter = await repo.hasOpenPosition(symbol, "LIVE");
+  assert.equal(openAfter, false);
+
+  await query("DELETE FROM order_history WHERE id = $1", [id]);
+});
+
+test("hasOpenPosition: FILLED_UNHEDGED counts as an open position (must block new entries)", { skip: !hasDatabase }, async () => {
+  const repo = await import("./order-repository.js");
+  await repo.ensureOrderStorage();
+  const { query } = await import("./database.js");
+
+  const symbol = `T3_${Date.now()%100000}`;
+  const id = `live_inttest3_${Date.now()}`;
+
+  await repo.insertOrder({
+    id,
+    clientOrderId: `bot01live_inttest3_${Date.now()}`,
+    symbol,
+    side: "BUY",
+    status: "CREATED",
+    provenance: "LIVE",
+    candleOpenTime: Date.now(),
+    requestedPrice: 150,
+    requestedQuantity: 1,
+    filledPrice: null,
+    filledQuantity: null,
+    stopLoss: 145,
+    takeProfit: 160,
+    stopLossOrderId: null,
+    takeProfitOrderId: null,
+    feePaid: null,
+    slippageApplied: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  await repo.updateOrderStatus(id, "FILLED_UNHEDGED");
+
+  const isOpen = await repo.hasOpenPosition(symbol, "LIVE");
+  assert.equal(isOpen, true, "FILLED_UNHEDGED must be treated as an open, unresolved position");
+
+  await query("DELETE FROM order_history WHERE id = $1", [id]);
+});
+
+test("order_history_symbol_candle_active_uidx: DB rejects a second active order for the same symbol+candle+provenance", { skip: !hasDatabase }, async () => {
+  const repo = await import("./order-repository.js");
+  await repo.ensureOrderStorage();
+  const { query } = await import("./database.js");
+
+  const symbol = `T4_${Date.now()%100000}`;
+  const candleOpenTime = Date.now();
+  const id1 = `dup_inttest_a_${Date.now()}`;
+  const id2 = `dup_inttest_b_${Date.now()}`;
+
+  const base = {
+    symbol,
+    side: "BUY" as const,
+    status: "CREATED" as const,
+    provenance: "LIVE" as const,
+    candleOpenTime,
+    requestedPrice: 150,
+    requestedQuantity: 1,
+    filledPrice: null,
+    filledQuantity: null,
+    stopLoss: 145,
+    takeProfit: 160,
+    stopLossOrderId: null,
+    takeProfitOrderId: null,
+    feePaid: null,
+    slippageApplied: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  await repo.insertOrder({ ...base, id: id1, clientOrderId: `c1_${Date.now()}` });
+
+  await assert.rejects(
+    repo.insertOrder({ ...base, id: id2, clientOrderId: `c2_${Date.now()}` }),
+    /duplicate key|unique/i
+  );
+
+  await query("DELETE FROM order_history WHERE id = $1", [id1]);
 });

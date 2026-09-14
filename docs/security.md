@@ -18,7 +18,11 @@
 When live execution is eventually implemented and you create a Binance
 API key for it:
 
-- Enable **Spot & Margin Trading** only.
+- Enable **Spot & Margin Trading** only. Order placement requires trading
+  permission; `RISK_MODEL=percent-balance` also requires the key to be
+  able to read account balances (`GET /api/v3/account`) — this is
+  included in standard Spot trading permission on Binance, no separate
+  "read-only" scope needs to be added.
 - **Disable withdrawal permission.** A trading bot never needs to
   withdraw funds, and disabling this permission means a compromised key
   cannot drain the account, only trade within it.

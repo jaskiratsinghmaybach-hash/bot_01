@@ -46,6 +46,26 @@ quantity below the exchange's minimum, the trade is **rejected**, not
 bumped up to the minimum — bumping up would mean risking more than
 configured, which defeats the purpose of a risk engine.
 
+## Risk models
+
+`RISK_MODEL` selects between two sizing approaches:
+
+- **`fixed-usd`** (default) — risk `RISK_PER_TRADE_USD` per trade,
+  regardless of account balance. Predictable; does not scale up or down
+  as the account grows or shrinks.
+- **`percent-balance`** — risk `RISK_PERCENT_OF_BALANCE` (e.g. 0.02 = 2%)
+  of the live quote-asset account balance per trade. Only meaningful
+  under `TRADING_MODE=live`, since it requires a real balance fetched
+  from Binance's `/api/v3/account` endpoint; `dry-run` and `paper` modes
+  always use `fixed-usd` regardless of this setting, since they have no
+  real balance to read.
+
+Under `percent-balance`, an independent `MAX_BALANCE_FRACTION` (default
+0.98) caps the position at that fraction of the fetched balance — this
+protects against a very tight stop-loss implying a position larger than
+the account can actually afford, the same way `MAX_POSITION_USD` protects
+`fixed-usd` sizing. Both caps can only shrink a position, never grow one.
+
 ## Position cap
 
 `MAX_POSITION_USD` is enforced independently of risk-based sizing. A very

@@ -26,7 +26,13 @@ export type OrderStatus =
   | 'CANCELED'
   | 'REJECTED'
   | 'EXPIRED'
-  | 'UNKNOWN';         // Network/response ambiguity — status could not be confirmed
+  | 'UNKNOWN'          // Network/response ambiguity — status could not be confirmed
+  | 'FILLED_UNHEDGED'; // LIVE only: entry filled but the protective OCO bracket
+                        // (stop-loss + take-profit) failed to place. The
+                        // position is open on the real exchange with NO
+                        // automated stop-loss protection. Requires manual
+                        // intervention. Never silently downgraded to FILLED
+                        // — that would hide a genuinely dangerous state.
 
 /** Where an order's fill price/status came from — never blur these together. */
 export type OrderProvenance = 'LIVE' | 'PAPER' | 'DRY_RUN';
@@ -39,6 +45,12 @@ export interface OrderState {
   side: 'BUY' | 'SELL';
   status: OrderStatus;
   provenance: OrderProvenance;
+  /**
+   * openingTime of the candle whose closed-candle signal produced this
+   * order. Used as a duplicate-order guard — the same signal candle
+   * should never produce two entries for the same symbol.
+   */
+  candleOpenTime: number;
   requestedPrice: number;
   requestedQuantity: number;
   /** Actual fill price. Null until a fill (real or simulated) has occurred. */
@@ -46,6 +58,10 @@ export interface OrderState {
   filledQuantity: number | null;
   stopLoss: number | null;
   takeProfit: number | null;
+  /** Real Binance order ID for the stop-loss leg of a live OCO bracket. Null until placed. LIVE provenance only. */
+  stopLossOrderId: string | null;
+  /** Real Binance order ID for the take-profit leg of a live OCO bracket. Null until placed. LIVE provenance only. */
+  takeProfitOrderId: string | null;
   /** Simulated or real fee paid, in quote-asset units. */
   feePaid: number | null;
   /** Simulated or real slippage applied vs requested price, in quote-asset units. */

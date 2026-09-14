@@ -8,14 +8,29 @@ async function bootSystemEngine() {
   console.log(`[BOOT] Symbol: ${environment.SYMBOL} | Trading mode: ${environment.TRADING_MODE.toUpperCase()}`);
 
   if (environment.TRADING_MODE === "live") {
-    // Phase B (real signed Binance execution) has not been built yet.
-    // Refuse to boot rather than starting a live-labeled process that
-    // cannot actually place live orders.
-    console.error(
-      "[BOOT FATAL] TRADING_MODE=live is not yet implemented in this build. " +
-        "Use TRADING_MODE=dry-run or TRADING_MODE=paper. See src/execution/live-adapter.ts."
+    // Live execution now exists (src/execution/live-adapter.ts), but its
+    // HTTP calls to Binance's real order endpoints have not been verified
+    // against a live or testnet account from this project's own
+    // development environment (outbound network to api.binance.com was
+    // unavailable there — see docs/verification.md). As an extra safety
+    // gate beyond just setting TRADING_MODE=live, boot also requires an
+    // explicit I_HAVE_TESTED_LIVE_EXECUTION=true acknowledgement — this is
+    // not a technical requirement, it exists specifically so going live
+    // is a deliberate, informed choice rather than an accidental one
+    // (e.g. a copy-pasted .env from a tutorial).
+    if (process.env.I_HAVE_TESTED_LIVE_EXECUTION !== "true") {
+      console.error(
+        "[BOOT FATAL] TRADING_MODE=live requires I_HAVE_TESTED_LIVE_EXECUTION=true to be set. " +
+          "This is a deliberate extra confirmation step — live execution has not been verified " +
+          "against Binance from this project's own development environment. Test against " +
+          "Binance's testnet first. See docs/execution.md and docs/verification.md."
+      );
+      process.exit(1);
+    }
+    console.warn(
+      "[BOOT] TRADING_MODE=live — real orders may be placed with real funds. " +
+        "Ensure you have tested against Binance's testnet first."
     );
-    process.exit(1);
   }
 
   let shuttingDown = false;
@@ -56,8 +71,6 @@ async function bootSystemEngine() {
     await backfillHistoricalData();
 
     // 6. Fire up the live real-time Binance market-data stream
-    //    (this only ever reads market data — it never places live orders,
-    //    regardless of TRADING_MODE, since TRADING_MODE=live is refused above)
     initializeMarketFeed();
 
     console.log("[BOOT] BOT_01 is running. Press Ctrl+C to stop.");

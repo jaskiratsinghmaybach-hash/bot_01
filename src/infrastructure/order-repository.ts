@@ -11,16 +11,19 @@ export async function ensureOrderStorage(): Promise<void> {
       status VARCHAR(50) NOT NULL CHECK (
         status IN (
           'CREATED', 'SUBMITTED', 'ACKNOWLEDGED', 'PARTIALLY_FILLED',
-          'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'UNKNOWN'
+          'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'UNKNOWN', 'FILLED_UNHEDGED'
         )
       ),
       provenance VARCHAR(10) NOT NULL CHECK (provenance IN ('LIVE', 'PAPER', 'DRY_RUN')),
+      candle_open_time BIGINT NOT NULL,
       requested_price NUMERIC(20, 8) NOT NULL,
       requested_quantity NUMERIC(20, 8) NOT NULL,
       filled_price NUMERIC(20, 8),
       filled_quantity NUMERIC(20, 8),
       stop_loss NUMERIC(20, 8),
       take_profit NUMERIC(20, 8),
+      stop_loss_order_id VARCHAR(100),
+      take_profit_order_id VARCHAR(100),
       fee_paid NUMERIC(20, 8),
       slippage_applied NUMERIC(20, 8),
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -38,6 +41,16 @@ export async function ensureOrderStorage(): Promise<void> {
       ON order_history (provenance)`
   );
 
+  // Duplicate-signal guard: the same symbol should never produce two
+  // non-rejected/non-canceled orders for the same signal candle. Partial
+  // index (not a blanket unique constraint) so a REJECTED or CANCELED
+  // order for a candle doesn't permanently block a legitimate retry.
+  await query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS order_history_symbol_candle_active_uidx
+      ON order_history (symbol, candle_open_time, provenance)
+      WHERE status NOT IN ('REJECTED', 'CANCELED')`
+  );
+
   await query(
     `CREATE TABLE IF NOT EXISTS paper_account_state (
       id SERIAL PRIMARY KEY,
@@ -51,10 +64,11 @@ export async function ensureOrderStorage(): Promise<void> {
 export async function insertOrder(order: OrderState): Promise<void> {
   await query(
     `INSERT INTO order_history
-      (id, client_order_id, symbol, side, status, provenance,
+      (id, client_order_id, symbol, side, status, provenance, candle_open_time,
        requested_price, requested_quantity, filled_price, filled_quantity,
-       stop_loss, take_profit, fee_paid, slippage_applied)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+       stop_loss, take_profit, stop_loss_order_id, take_profit_order_id,
+       fee_paid, slippage_applied)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       order.id,
       order.clientOrderId,
@@ -62,12 +76,15 @@ export async function insertOrder(order: OrderState): Promise<void> {
       order.side,
       order.status,
       order.provenance,
+      order.candleOpenTime,
       order.requestedPrice,
       order.requestedQuantity,
       order.filledPrice,
       order.filledQuantity,
       order.stopLoss,
       order.takeProfit,
+      order.stopLossOrderId,
+      order.takeProfitOrderId,
       order.feePaid,
       order.slippageApplied,
     ]
@@ -77,7 +94,9 @@ export async function insertOrder(order: OrderState): Promise<void> {
 export async function updateOrderStatus(
   id: string,
   status: OrderState["status"],
-  fields: Partial<Pick<OrderState, "filledPrice" | "filledQuantity" | "feePaid" | "slippageApplied">> = {}
+  fields: Partial<
+    Pick<OrderState, "filledPrice" | "filledQuantity" | "feePaid" | "slippageApplied" | "stopLossOrderId" | "takeProfitOrderId">
+  > = {}
 ): Promise<void> {
   await query(
     `UPDATE order_history
@@ -86,6 +105,8 @@ export async function updateOrderStatus(
          filled_quantity = COALESCE($4, filled_quantity),
          fee_paid = COALESCE($5, fee_paid),
          slippage_applied = COALESCE($6, slippage_applied),
+         stop_loss_order_id = COALESCE($7, stop_loss_order_id),
+         take_profit_order_id = COALESCE($8, take_profit_order_id),
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $1`,
     [
@@ -95,8 +116,48 @@ export async function updateOrderStatus(
       fields.filledQuantity ?? null,
       fields.feePaid ?? null,
       fields.slippageApplied ?? null,
+      fields.stopLossOrderId ?? null,
+      fields.takeProfitOrderId ?? null,
     ]
   );
+}
+
+/**
+ * Returns true if an active (non-REJECTED, non-CANCELED) order already
+ * exists for this symbol + provenance + signal candle — used as a
+ * duplicate-order guard before submitting a new order for a closed
+ * candle's signal.
+ */
+export async function hasActiveOrderForCandle(
+  symbol: string,
+  provenance: OrderState["provenance"],
+  candleOpenTime: number
+): Promise<boolean> {
+  const result = await query(
+    `SELECT 1 FROM order_history
+     WHERE symbol = $1 AND provenance = $2 AND candle_open_time = $3
+       AND status NOT IN ('REJECTED', 'CANCELED')
+     LIMIT 1`,
+    [symbol, provenance, candleOpenTime]
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Returns true if any order for this symbol + provenance is currently in
+ * an open, unresolved state (CREATED, SUBMITTED, ACKNOWLEDGED,
+ * PARTIALLY_FILLED, FILLED, FILLED_UNHEDGED, UNKNOWN) — used to enforce a
+ * single-open-position-at-a-time policy before submitting a new entry.
+ */
+export async function hasOpenPosition(symbol: string, provenance: OrderState["provenance"]): Promise<boolean> {
+  const result = await query(
+    `SELECT 1 FROM order_history
+     WHERE symbol = $1 AND provenance = $2
+       AND status IN ('CREATED', 'SUBMITTED', 'ACKNOWLEDGED', 'PARTIALLY_FILLED', 'FILLED', 'FILLED_UNHEDGED', 'UNKNOWN')
+     LIMIT 1`,
+    [symbol, provenance]
+  );
+  return result.rows.length > 0;
 }
 
 /** Reads the current simulated PAPER balance for an asset, defaulting to 0 if never initialized. */

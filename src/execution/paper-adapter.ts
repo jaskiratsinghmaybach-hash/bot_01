@@ -60,7 +60,8 @@ export async function fetchCurrentPrice(symbol: string): Promise<number> {
 export async function submitPaperOrder(
   decision: RiskDecision,
   stopLoss: number,
-  takeProfit: number
+  takeProfit: number,
+  candleOpenTime: number
 ): Promise<PaperFillResult> {
   if (!decision.approved || decision.quantity === null || decision.price === null) {
     throw new Error("submitPaperOrder called with an unapproved risk decision");
@@ -101,12 +102,15 @@ export async function submitPaperOrder(
     side,
     status: "CREATED",
     provenance: "PAPER",
+    candleOpenTime,
     requestedPrice,
     requestedQuantity,
     filledPrice: null,
     filledQuantity: null,
     stopLoss,
     takeProfit,
+    stopLossOrderId: null,
+    takeProfitOrderId: null,
     feePaid: null,
     slippageApplied: null,
     createdAt: now,

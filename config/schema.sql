@@ -34,6 +34,11 @@ CREATE INDEX IF NOT EXISTS market_candles_symbol_interval_time_idx
 -- (provenance = PAPER) has actually occurred — never on order construction
 -- alone. provenance must never be conflated: a PAPER row is a simulation
 -- and must never be presented or queried as if it were a LIVE result.
+-- FILLED_UNHEDGED (LIVE only) marks an entry that filled but whose
+-- protective OCO bracket (stop-loss + take-profit) failed to place — the
+-- position is open on the real exchange with no automated stop. This is
+-- never silently collapsed into FILLED, since that would hide a genuinely
+-- dangerous, unprotected position from anyone querying order history.
 CREATE TABLE IF NOT EXISTS order_history (
     id VARCHAR(100) PRIMARY KEY,
     client_order_id VARCHAR(100) NOT NULL,
@@ -42,16 +47,24 @@ CREATE TABLE IF NOT EXISTS order_history (
     status VARCHAR(50) NOT NULL CHECK (
         status IN (
             'CREATED', 'SUBMITTED', 'ACKNOWLEDGED', 'PARTIALLY_FILLED',
-            'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'UNKNOWN'
+            'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'UNKNOWN', 'FILLED_UNHEDGED'
         )
     ),
     provenance VARCHAR(10) NOT NULL CHECK (provenance IN ('LIVE', 'PAPER', 'DRY_RUN')),
+    -- openingTime of the closed candle whose signal produced this order —
+    -- the basis of the duplicate-order guard below.
+    candle_open_time BIGINT NOT NULL,
     requested_price NUMERIC(20, 8) NOT NULL,
     requested_quantity NUMERIC(20, 8) NOT NULL,
     filled_price NUMERIC(20, 8),
     filled_quantity NUMERIC(20, 8),
     stop_loss NUMERIC(20, 8),
     take_profit NUMERIC(20, 8),
+    -- Real Binance order IDs for the OCO bracket legs (LIVE only). NULL
+    -- for PAPER/DRY_RUN and for LIVE orders where the bracket hasn't been
+    -- placed yet (or failed — see FILLED_UNHEDGED above).
+    stop_loss_order_id VARCHAR(100),
+    take_profit_order_id VARCHAR(100),
     fee_paid NUMERIC(20, 8),
     slippage_applied NUMERIC(20, 8),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -63,6 +76,14 @@ CREATE INDEX IF NOT EXISTS order_history_symbol_created_idx
 
 CREATE INDEX IF NOT EXISTS order_history_provenance_idx
     ON order_history (provenance);
+
+-- Duplicate-signal guard: at most one active (non-REJECTED, non-CANCELED)
+-- order per symbol + provenance + signal candle. A partial unique index
+-- (rather than a blanket constraint) so a REJECTED/CANCELED row for a
+-- candle doesn't permanently block a legitimate retry for that candle.
+CREATE UNIQUE INDEX IF NOT EXISTS order_history_symbol_candle_active_uidx
+    ON order_history (symbol, candle_open_time, provenance)
+    WHERE status NOT IN ('REJECTED', 'CANCELED');
 
 -- Simulated account balance for PAPER mode only. Never used for LIVE trading
 -- decisions — live balance must come from Binance's account endpoint.

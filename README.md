@@ -5,9 +5,10 @@ engine, risk engine, and paper/dry-run execution framework for
 cryptocurrency swing trading — written in strict TypeScript, backed by
 PostgreSQL.
 
-**Live trading execution is not yet implemented.** This build supports
-`dry-run` (log-only) and `paper` (simulated fills against real market
-prices) modes. See [Execution](#execution) below.
+**Live trading execution now exists but has not been verified against
+real or testnet Binance from this project's development environment.**
+See [Limitations](#limitations-read-this-before-buying-or-deploying)
+before enabling `TRADING_MODE=live`.
 
 ## Features
 
@@ -17,9 +18,16 @@ prices) modes. See [Execution](#execution) below.
   filter, higher-low swing structure detection, exact 1:2 risk/reward
   enforcement — pure functions, fully unit-tested, no look-ahead bias
   (verified by a dedicated test)
-- **Risk engine** — position sizing from risk parameters, exchange
-  precision normalization (LOT_SIZE/PRICE_FILTER/MIN_NOTIONAL), always
-  floors (never rounds up) so normalization can only reduce risk
+- **Risk engine** — position sizing from risk parameters (fixed-USD or
+  percent-of-balance, selectable via `RISK_MODEL`), exchange precision
+  normalization (LOT_SIZE/PRICE_FILTER/MIN_NOTIONAL), always floors
+  (never rounds up) so normalization can only reduce risk
+- **Live execution** — HMAC-SHA256 signed Binance order submission
+  (MARKET BUY + OCO stop-loss/take-profit bracket), verified byte-for-byte
+  against Binance's own published signing example; duplicate-order and
+  single-open-position guards enforced at both the application and
+  database level; an explicit `FILLED_UNHEDGED` state if a bracket
+  placement fails after entry, never silently hidden
 - **Honest order lifecycle** — `CREATED → SUBMITTED → ... → FILLED`, with
   a `provenance` field (`LIVE`/`PAPER`/`DRY_RUN`) so a simulated fill can
   never be confused with a real one
@@ -28,9 +36,10 @@ prices) modes. See [Execution](#execution) below.
 - **Backtest engine** — historical replay of the real strategy/risk logic
   under documented fee/slippage assumptions, look-ahead-safe by
   construction (expanding window, verified by test)
-- **70 automated tests** — strategy math, risk math, exchange precision,
-  candle validation, backtest mechanics, and real-database integration
-  tests (not mocked)
+- **88 automated tests** — strategy math, risk math, exchange precision,
+  Binance request signing (verified against Binance's own published
+  example), candle validation, backtest mechanics, duplicate-order/
+  open-position guards, and real-database integration tests (not mocked)
 - **VPS deployment path** — systemd service, graceful shutdown on
   SIGINT/SIGTERM
 
@@ -81,7 +90,7 @@ Three modes via `TRADING_MODE`:
 |---|---|---|
 | `dry-run` (default) | Logs what would be submitted. No persistence. | None |
 | `paper` | Simulates a fill against a real fetched Binance price, with configurable slippage/fees, tracked against a simulated balance in Postgres. | None |
-| `live` | **Not yet implemented.** The app refuses to boot if this is set. | N/A |
+| `live` | Real signed Binance orders (MARKET BUY + OCO stop-loss/take-profit bracket). Requires `I_HAVE_TESTED_LIVE_EXECUTION=true` as an explicit extra confirmation. **HTTP calls to Binance have not been verified from this project's dev environment — see Limitations.** | `BINANCE_API_KEY`, `BINANCE_SECRET_KEY` |
 
 Detail: [`docs/execution.md`](docs/execution.md).
 
@@ -116,7 +125,7 @@ status. Never places an order. Detail:
 npm test
 ```
 
-70 automated tests. Database-integration tests are skipped automatically
+88 automated tests. Database-integration tests are skipped automatically
 if `DATABASE_URL` isn't set (not silently passed — reported as
 `skipped`). To run the full suite including real-Postgres integration
 tests:
@@ -151,20 +160,25 @@ API key permissions, secret handling, firewall guidance:
 
 ## Limitations (read this before buying or deploying)
 
-- **Live execution is not implemented.** Only `dry-run` and `paper`
-  modes work today. Building signed live Binance order submission is a
-  distinct, not-yet-started phase of this project.
+- **Live execution HTTP calls have not been verified against real or
+  testnet Binance.** The HMAC-SHA256 request signing is proven correct —
+  verified byte-for-byte against Binance's own published worked example,
+  independently cross-checked against raw OpenSSL. But the actual order
+  placement calls (`MARKET BUY`, OCO bracket, account balance fetch) have
+  not been exercised against a live or testnet account, since outbound
+  network access to `api.binance.com` was unavailable in this project's
+  development environment. **Test against Binance's testnet before any
+  mainnet use.** See [`docs/verification.md`](docs/verification.md).
+- **No order reconciliation.** If a network error occurs after Binance
+  may have already processed a request, the current code assumes
+  rejection rather than querying Binance to confirm the true state. See
+  [`docs/execution.md`](docs/execution.md) for detail — this is a real
+  gap, not a theoretical one.
 - **Long-only, single-symbol, single-strategy.** No shorting, no
   multi-symbol portfolio logic.
-- **Binance-facing code could not be verified from this project's own
-  development environment** (outbound network to `api.binance.com` was
-  blocked in that sandbox). It was code-reviewed and type-checked, but
-  verify it yourself against live Binance before relying on `paper` mode.
-  See [`docs/verification.md`](docs/verification.md) for exactly what was
-  and wasn't confirmed.
 - **No circuit breaker / daily loss limit / multi-position portfolio
-  risk.** Risk per trade is a fixed USD amount; there's no protection
-  against a losing streak beyond each trade's own stop-loss.
+  risk.** Single open position at a time is enforced, but there's no
+  protection against a losing streak beyond each trade's own stop-loss.
 - **No built-in health-check HTTP endpoint** for automated monitoring —
   see `docs/deployment.md` for what monitoring options exist today.
 - **The paper-trading balance model tracks quote-currency balance only**

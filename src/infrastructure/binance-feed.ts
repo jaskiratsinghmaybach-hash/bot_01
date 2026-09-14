@@ -225,6 +225,17 @@ function initializeMarketStream(interval: Candle["interval"]): void {
         return;
       }
 
+      if (environment.TRADING_MODE === "live") {
+        // Live mode resolves its own risk decision internally (fixed-usd or
+        // percent-balance per RISK_MODEL) since percent-balance requires a
+        // live account balance fetch that only the live adapter should
+        // perform. See execution/live-adapter.ts.
+        await routeExecution(candidate, null, cachedSymbolRules);
+        return;
+      }
+
+      // dry-run / paper: always fixed-usd risk sizing, evaluated here
+      // against the already-loaded exchange rules.
       const riskDecision = evaluateRisk(
         {
           side: candidate.direction,
@@ -236,7 +247,7 @@ function initializeMarketStream(interval: Candle["interval"]): void {
         cachedSymbolRules
       );
 
-      await routeExecution(riskDecision, candidate.stopLoss, candidate.takeProfit);
+      await routeExecution(candidate, riskDecision, cachedSymbolRules);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[DATA] Failed to process ${interval} candle:`, message);
