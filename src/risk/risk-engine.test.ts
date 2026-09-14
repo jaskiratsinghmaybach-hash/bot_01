@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateRisk, computeRiskDistance } from "./risk-engine.js";
+import { evaluateRisk, computeRiskDistance, resolveRiskAmountUsd } from "./risk-engine.js";
 import type { SymbolRules } from "../exchange/exchange-info.js";
 
 const SOLUSDC_RULES: SymbolRules = {
@@ -115,4 +115,88 @@ test("evaluateRisk rejects when normalized quantity falls below exchange minQty"
   );
   assert.equal(decision.approved, false);
   assert.match(decision.reason, /minQty/);
+});
+
+test("resolveRiskAmountUsd: fixed-usd model returns riskPerTradeUsd unchanged, ignoring balance", () => {
+  const result = resolveRiskAmountUsd({
+    riskModel: "fixed-usd",
+    riskPerTradeUsd: 25,
+    riskPercentOfBalance: 0.02,
+    accountBalanceUsd: 999999,
+  });
+  assert.deepEqual(result, { riskAmountUsd: 25 });
+});
+
+test("resolveRiskAmountUsd: percent-balance model computes balance * percent", () => {
+  const result = resolveRiskAmountUsd({
+    riskModel: "percent-balance",
+    riskPerTradeUsd: 25,
+    riskPercentOfBalance: 0.02,
+    accountBalanceUsd: 1000,
+  });
+  assert.deepEqual(result, { riskAmountUsd: 20 });
+});
+
+test("resolveRiskAmountUsd: percent-balance model errors without a valid balance", () => {
+  const result = resolveRiskAmountUsd({
+    riskModel: "percent-balance",
+    riskPerTradeUsd: 25,
+    riskPercentOfBalance: 0.02,
+    accountBalanceUsd: null,
+  });
+  assert.ok("error" in result);
+});
+
+test("resolveRiskAmountUsd: percent-balance model errors on zero/negative balance", () => {
+  const result = resolveRiskAmountUsd({
+    riskModel: "percent-balance",
+    riskPerTradeUsd: 25,
+    riskPercentOfBalance: 0.02,
+    accountBalanceUsd: 0,
+  });
+  assert.ok("error" in result);
+});
+
+test("evaluateRisk: accountBalanceUsd + maxBalanceFraction clamps quantity below what risk math alone implies", () => {
+  // riskDistance = 0.01 (very tight stop) -> rawQuantity = 25/0.01 = 2500,
+  // notional = 2500*150 = 375000, far beyond a $1000 balance.
+  const decision = evaluateRisk(
+    {
+      side: "BUY",
+      entryPrice: 150,
+      stopLoss: 149.99,
+      riskAmountUsd: 25,
+      maxPositionUsd: 500000, // deliberately high so maxPositionUsd isn't what's clamping this
+      accountBalanceUsd: 1000,
+      maxBalanceFraction: 0.98,
+    },
+    SOLUSDC_RULES
+  );
+  assert.equal(decision.approved, true);
+  const notional = decision.quantity! * decision.price!;
+  assert.ok(notional <= 1000 * 0.98 * 1.01, `notional ${notional} exceeded balance affordability ceiling`);
+});
+
+test("evaluateRisk: providing accountBalanceUsd without maxBalanceFraction is rejected", () => {
+  const decision = evaluateRisk(
+    {
+      side: "BUY",
+      entryPrice: 150,
+      stopLoss: 145,
+      riskAmountUsd: 25,
+      maxPositionUsd: 500,
+      accountBalanceUsd: 1000,
+    },
+    SOLUSDC_RULES
+  );
+  assert.equal(decision.approved, false);
+});
+
+test("evaluateRisk: omitting accountBalanceUsd entirely behaves exactly as before (paper/dry-run path unaffected)", () => {
+  const decision = evaluateRisk(
+    { side: "BUY", entryPrice: 150, stopLoss: 145, riskAmountUsd: 25, maxPositionUsd: 500 },
+    SOLUSDC_RULES
+  );
+  assert.equal(decision.approved, true);
+  assert.equal(decision.rawQuantity, 5);
 });

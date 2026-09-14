@@ -11,6 +11,7 @@ import "dotenv/config";
  */
 
 export type TradingMode = "dry-run" | "paper" | "live";
+export type RiskModel = "fixed-usd" | "percent-balance";
 
 export interface Environment {
   /** Binance API key. Required only when TRADING_MODE=live. */
@@ -32,11 +33,38 @@ export interface Environment {
    */
   TRADING_MODE: TradingMode;
 
-  /** USD risked per trade. Used by the risk engine to size positions. */
+  /** USD risked per trade. Used by the risk engine to size positions when RISK_MODEL=fixed-usd. */
   RISK_PER_TRADE_USD: number;
+
+  /**
+   * fixed-usd        — risk a fixed dollar amount per trade (RISK_PER_TRADE_USD),
+   *                     regardless of account balance. Predictable, does not
+   *                     compound or scale down as balance changes.
+   * percent-balance  — risk a percentage of the LIVE account balance per trade
+   *                     (RISK_PERCENT_OF_BALANCE). Only meaningful in TRADING_MODE=live,
+   *                     since paper/dry-run have no real balance to read; percent-balance
+   *                     under paper mode falls back to PAPER_STARTING_BALANCE_USD as the
+   *                     balance basis (see docs/risk-management.md).
+   */
+  RISK_MODEL: RiskModel;
+
+  /** Percent of account balance risked per trade (e.g. 0.02 = 2%). Used only when RISK_MODEL=percent-balance. */
+  RISK_PERCENT_OF_BALANCE: number;
 
   /** Hard ceiling on notional position size in USD, independent of risk sizing. */
   MAX_POSITION_USD: number;
+
+  /**
+   * Fraction of available balance treated as the absolute affordability
+   * ceiling, independent of risk-based sizing — a defensive clamp so a
+   * position can never be sized to consume the entire balance even if
+   * risk math alone would imply it (e.g. a very tight stop under
+   * percent-balance sizing). Used only when RISK_MODEL=percent-balance.
+   */
+  MAX_BALANCE_FRACTION: number;
+
+  /** Binance recvWindow in milliseconds for signed requests. Required only for TRADING_MODE=live. */
+  RECV_WINDOW_MS: number;
 
   /**
    * Starting simulated USD balance for PAPER mode only. Irrelevant in dry-run/live.
@@ -98,6 +126,16 @@ function parseTradingMode(raw: string | undefined): TradingMode {
   );
 }
 
+function parseRiskModel(raw: string | undefined): RiskModel {
+  const value = (raw ?? "fixed-usd").trim().toLowerCase();
+  if (value === "fixed-usd" || value === "percent-balance") {
+    return value;
+  }
+  throw new ConfigError(
+    `RISK_MODEL must be one of "fixed-usd", "percent-balance" — got "${raw}".`
+  );
+}
+
 function parseLogLevel(raw: string | undefined): Environment["LOG_LEVEL"] {
   const value = (raw ?? "info").trim().toLowerCase();
   if (value === "debug" || value === "info" || value === "warn" || value === "error") {
@@ -128,7 +166,11 @@ function loadEnvironment(): Environment {
   }
 
   const RISK_PER_TRADE_USD = requireNumber("RISK_PER_TRADE_USD", 25);
+  const RISK_MODEL = parseRiskModel(process.env.RISK_MODEL);
+  const RISK_PERCENT_OF_BALANCE = requireNumber("RISK_PERCENT_OF_BALANCE", 0.02);
   const MAX_POSITION_USD = requireNumber("MAX_POSITION_USD", 500);
+  const MAX_BALANCE_FRACTION = requireNumber("MAX_BALANCE_FRACTION", 0.98);
+  const RECV_WINDOW_MS = requireNumber("RECV_WINDOW_MS", 5000);
   const PAPER_STARTING_BALANCE_USD = requireNumber("PAPER_STARTING_BALANCE_USD", 1000);
   const PAPER_SLIPPAGE_FRACTION = requireNumber("PAPER_SLIPPAGE_FRACTION", 0.0005);
   const PAPER_FEE_FRACTION = requireNumber("PAPER_FEE_FRACTION", 0.001);
@@ -144,6 +186,19 @@ function loadEnvironment(): Environment {
       `RISK_PER_TRADE_USD (${RISK_PER_TRADE_USD}) cannot exceed MAX_POSITION_USD (${MAX_POSITION_USD})`
     );
   }
+  if (RISK_PERCENT_OF_BALANCE <= 0 || RISK_PERCENT_OF_BALANCE > 1) {
+    throw new ConfigError(
+      `RISK_PERCENT_OF_BALANCE must be between 0 (exclusive) and 1 (inclusive) as a fraction — e.g. 0.02 for 2%. Got ${RISK_PERCENT_OF_BALANCE}`
+    );
+  }
+  if (MAX_BALANCE_FRACTION <= 0 || MAX_BALANCE_FRACTION > 1) {
+    throw new ConfigError(
+      `MAX_BALANCE_FRACTION must be between 0 (exclusive) and 1 (inclusive) — e.g. 0.98 for 98%. Got ${MAX_BALANCE_FRACTION}`
+    );
+  }
+  if (RECV_WINDOW_MS <= 0) {
+    throw new ConfigError(`RECV_WINDOW_MS must be > 0, got ${RECV_WINDOW_MS}`);
+  }
 
   const LOG_LEVEL = parseLogLevel(process.env.LOG_LEVEL);
 
@@ -154,7 +209,11 @@ function loadEnvironment(): Environment {
     SYMBOL,
     TRADING_MODE,
     RISK_PER_TRADE_USD,
+    RISK_MODEL,
+    RISK_PERCENT_OF_BALANCE,
     MAX_POSITION_USD,
+    MAX_BALANCE_FRACTION,
+    RECV_WINDOW_MS,
     PAPER_STARTING_BALANCE_USD,
     PAPER_SLIPPAGE_FRACTION,
     PAPER_FEE_FRACTION,
